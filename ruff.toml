@@ -1,0 +1,7 @@
+# Настройки линтера ruff (проверка кода Python в CI)
+line-length = 120
+
+[lint.flake8-bugbear]
+# В FastAPI вызов Depends() и Header() в значениях аргументов по умолчанию —
+# штатный способ подключения зависимостей, а не ошибка (правило B008)
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header"]

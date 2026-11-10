@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 import socket
+from pathlib import Path
 
 import psycopg
 import redis
@@ -25,7 +26,7 @@ HOSTNAME = socket.gethostname()  # имя контейнера, показыва
 # файлом /run/secrets/db_password. Если файла нет (обычный docker compose),
 # пароль берётся из DATABASE_URL.
 SECRET_FILE = "/run/secrets/db_password"
-DB_PASSWORD = open(SECRET_FILE).read().strip() if os.path.exists(SECRET_FILE) else None
+DB_PASSWORD = Path(SECRET_FILE).read_text().strip() if os.path.exists(SECRET_FILE) else None
 
 app = FastAPI(title="CourseHub API")
 cache = redis.Redis.from_url(REDIS_URL, decode_responses=True)

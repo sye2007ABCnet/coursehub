@@ -33,7 +33,7 @@ jobs:
 
       - name: Проверка кода Python (ruff)
         run: |
-          pip install ruff
+          pip install ruff==0.17.4      # версия зафиксирована: новые версии могут добавлять правила
           ruff check api/
 
       - name: Проверка Dockerfile (hadolint)
