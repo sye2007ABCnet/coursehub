@@ -28,7 +28,8 @@ HOSTNAME = socket.gethostname()  # имя контейнера, показыва
 SECRET_FILE = "/run/secrets/db_password"
 DB_PASSWORD = Path(SECRET_FILE).read_text().strip() if os.path.exists(SECRET_FILE) else None
 
-app = FastAPI(title="CourseHub API")
+# Документация API (Swagger UI) доступна через nginx: http://localhost:8081/api/docs
+app = FastAPI(title="CourseHub API", docs_url="/api/docs", openapi_url="/api/openapi.json")
 cache = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
 
