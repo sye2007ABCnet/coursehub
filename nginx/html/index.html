@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>CourseHub</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; color: #222; }
+    header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; }
+    section { margin: 20px 0; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border-bottom: 1px solid #eee; padding: 6px; text-align: left; }
+    input, select, button { padding: 6px; margin: 4px 4px 4px 0; }
+    .hidden { display: none; }
+    .done { color: green; }
+    footer { margin-top: 40px; color: #888; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>CourseHub</h1>
+    <div id="userbox" class="hidden"><span id="username"></span> <button onclick="logout()">Выйти</button></div>
+  </header>
+
+  <!-- Форма входа -->
+  <section id="login">
+    <h2>Вход</h2>
+    <input id="email" placeholder="Email" value="admin@corp.local">
+    <input id="password" type="password" placeholder="Пароль" value="admin123">
+    <button onclick="login()">Войти</button>
+    <p>Администратор: admin@corp.local / admin123<br>Сотрудник: ivanov@corp.local / employee123</p>
+  </section>
+
+  <!-- Страница сотрудника -->
+  <section id="employee" class="hidden">
+    <h2>Мои курсы</h2>
+    <table id="my-courses"></table>
+  </section>
+
+  <!-- Страница администратора -->
+  <section id="admin" class="hidden">
+    <h2>Курсы</h2>
+    <input id="course-title" placeholder="Название курса">
+    <input id="course-desc" placeholder="Описание">
+    <button onclick="addCourse()">Добавить курс</button>
+    <table id="courses"></table>
+
+    <h2>Сотрудники</h2>
+    <input id="emp-name" placeholder="ФИО">
+    <input id="emp-email" placeholder="Email">
+    <input id="emp-dept" placeholder="Подразделение">
+    <input id="emp-pass" placeholder="Пароль">
+    <button onclick="addEmployee()">Добавить сотрудника</button>
+    <table id="employees"></table>
+
+    <h2>Назначения</h2>
+    <select id="en-employee"></select>
+    <select id="en-course"></select>
+    <input id="en-deadline" type="date">
+    <button onclick="addEnrollment()">Назначить курс</button>
+    <table id="enrollments"></table>
+  </section>
+
+  <footer>Ответ получен от контейнера: <b id="served-by">—</b></footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

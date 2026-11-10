@@ -1,0 +1,36 @@
+# Redis: сессии пользователей и кэш списка курсов
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: coursehub
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:8.2-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 6379
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: coursehub
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379

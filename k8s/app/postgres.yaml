@@ -1,0 +1,84 @@
+# База данных PostgreSQL.
+# StatefulSet — объект для приложений с постоянными данными: под получает
+# стабильное имя (postgres-0) и собственный постоянный том.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: coursehub
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      # Доступ к API Kubernetes поду не нужен. Кроме того, токен доступа монтируется в
+      # /var/run/secrets/..., а /var/run в образе — ссылка на /run, где уже смонтирован
+      # наш секрет (только для чтения), из-за чего контейнер не может запуститься
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_USER
+              value: coursehub
+            - name: POSTGRES_DB
+              value: coursehub
+            - name: POSTGRES_PASSWORD_FILE
+              value: /run/secrets/db_password
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init-sql                         # init.sql из ConfigMap
+              mountPath: /docker-entrypoint-initdb.d
+            - name: db-password                      # пароль из Secret
+              mountPath: /run/secrets
+              readOnly: true
+          # Под получает трафик только после того, как БД готова принимать подключения
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U coursehub -d coursehub"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+      volumes:
+        - name: init-sql
+          configMap:
+            name: db-init
+        - name: db-password
+          secret:
+            secretName: db-password
+            items:
+              - key: password
+                path: db_password      # файл /run/secrets/db_password, как в Swarm
+  # Шаблон постоянного тома: Kubernetes создаёт том размером 1 ГБ для пода
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+# Service — постоянный адрес и DNS-имя «postgres» для подключения к БД внутри кластера
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: coursehub
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432

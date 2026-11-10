@@ -1,0 +1,83 @@
+# Серверная часть (API).
+# Deployment — объект для приложений без состояния: поддерживает заданное
+# число одинаковых подов и обновляет их по одному.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: coursehub
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1          # при обновлении создаётся не более одного лишнего пода
+      maxUnavailable: 0    # работающие поды не останавливаются, пока новый не готов
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      # Равномерное распределение подов по узлам кластера
+      # Доступ к API Kubernetes поду не нужен. Кроме того, токен доступа монтируется в
+      # /var/run/secrets/..., а /var/run в образе — ссылка на /run, где уже смонтирован
+      # наш секрет (только для чтения), из-за чего контейнер не может запуститься
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: api
+      containers:
+        - name: api
+          image: coursehub-api:1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DATABASE_URL
+              value: postgresql://coursehub@postgres:5432/coursehub   # пароль берётся из Secret
+            - name: REDIS_URL
+              value: redis://redis:6379/0
+          ports:
+            - containerPort: 8000
+          volumeMounts:
+            - name: db-password
+              mountPath: /run/secrets
+              readOnly: true
+          # readiness: под включается в балансировку, только когда доступны БД и Redis
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            periodSeconds: 5
+          # liveness: если процесс перестал отвечать, Kubernetes перезапустит контейнер
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+      volumes:
+        - name: db-password
+          secret:
+            secretName: db-password
+            items:
+              - key: password
+                path: db_password
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: coursehub
+spec:
+  selector:
+    app: api
+  ports:
+    - port: 8000

@@ -1,0 +1,22 @@
+# Конфигурация кластера Kubernetes для kind (Kubernetes IN Docker).
+# Создание кластера: kind create cluster --config k8s/kind-config.yaml
+#
+# Каждый узел — контейнер Docker. Кластер состоит из управляющего узла
+# (control-plane) и двух рабочих узлов (worker).
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: coursehub
+
+nodes:
+  - role: control-plane
+    # Проброс портов с узла на компьютер: сервисы типа NodePort
+    # становятся доступны по адресу localhost
+    extraPortMappings:
+      - containerPort: 30081    # nginx (сайт)
+        hostPort: 8081
+      - containerPort: 30082    # Adminer
+        hostPort: 8082
+        listenAddress: "127.0.0.1"
+  - role: worker
+  - role: worker

@@ -1,0 +1,181 @@
+# Конвейер CI/CD проекта CourseHub.
+#
+#   1. lint   — проверка кода и конфигураций
+#   2. test   — запуск всех контейнеров и проверка работы сайта
+#   3. build  — сборка образов и публикация в GitHub Container Registry
+#   4. deploy — обновление приложения в кластере Kubernetes
+#
+# Этапы 1–3 выполняются на серверах GitHub, этап 4 — на компьютере
+# с кластером (self-hosted runner), потому что из интернета кластер недоступен.
+
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:          # ручной запуск из вкладки Actions
+
+jobs:
+
+  # ---------- 1. Проверка кода и конфигураций ----------
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Получение кода из репозитория
+        uses: actions/checkout@v7
+
+      - name: Установка Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Проверка кода Python (ruff)
+        run: |
+          pip install ruff
+          ruff check api/
+
+      - name: Проверка Dockerfile (hadolint)
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: api/Dockerfile
+
+      - name: Проверка Dockerfile nginx (hadolint)
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: nginx/Dockerfile
+
+      - name: Проверка compose.yaml
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+
+      - name: Проверка манифестов Kubernetes (kubeconform)
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz | tar xz
+          ./kubeconform -strict -summary k8s/app/
+
+  # ---------- 2. Запуск контейнеров и проверка работы ----------
+  test:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Запуск всех контейнеров
+        run: |
+          cp .env.example .env
+          docker compose up -d --build --wait
+
+      - name: Проверка API через nginx
+        run: |
+          # сервис отвечает и видит БД и Redis
+          curl -fsS http://localhost:8081/api/health
+
+          # вход администратора и получение токена
+          TOKEN=$(curl -fsS -X POST http://localhost:8081/api/login \
+            -H "Content-Type: application/json" \
+            -d '{"email": "admin@corp.local", "password": "admin123"}' | jq -r .token)
+
+          # список курсов из начальных данных
+          COUNT=$(curl -fsS http://localhost:8081/api/courses -H "Authorization: Bearer $TOKEN" | jq length)
+          echo "Курсов в базе: $COUNT"
+          test "$COUNT" -ge 3
+
+          # неверный пароль должен отклоняться
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8081/api/login \
+            -H "Content-Type: application/json" -d '{"email": "admin@corp.local", "password": "wrong"}')
+          test "$CODE" -eq 401
+
+      - name: Журналы контейнеров при ошибке
+        if: failure()
+        run: docker compose logs
+
+      - name: Остановка контейнеров
+        if: always()
+        run: docker compose down -v
+
+  # ---------- 3. Сборка и публикация образов ----------
+  build:
+    needs: test
+    if: github.event_name != 'pull_request'     # из запросов на слияние образы не публикуются
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write                           # право публиковать образы в GHCR
+    strategy:
+      matrix:
+        service: [api, nginx]                   # два образа собираются параллельно
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Вход в GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Формирование имени и тегов образа
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/coursehub-${{ matrix.service }}
+          tags: |
+            type=sha
+            type=raw,value=latest
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Сборка и публикация образа
+        uses: docker/build-push-action@v7
+        with:
+          context: ./${{ matrix.service }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+
+  # ---------- 4. Развёртывание в кластере Kubernetes ----------
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: self-hosted                        # раннер на компьютере с кластером kind
+    permissions:
+      packages: read
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Определение имён образов
+        run: |
+          $owner = $env:GITHUB_REPOSITORY_OWNER.ToLower()
+          $tag = "sha-" + $env:GITHUB_SHA.Substring(0, 7)
+          "API_IMAGE=ghcr.io/$owner/coursehub-api:$tag" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "NGINX_IMAGE=ghcr.io/$owner/coursehub-nginx:$tag" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Скачивание новых образов из GHCR
+        run: |
+          $env:TOKEN | docker login ghcr.io -u $env:ACTOR --password-stdin
+          docker pull $env:API_IMAGE
+          docker pull $env:NGINX_IMAGE
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+
+      - name: Загрузка образов в узлы кластера
+        run: |
+          foreach ($image in $env:API_IMAGE, $env:NGINX_IMAGE) {
+            docker save --platform linux/amd64 -o image.tar $image
+            kind load image-archive image.tar --name coursehub
+          }
+          Remove-Item image.tar
+
+      - name: Обновление приложения (rolling update)
+        run: |
+          kubectl -n coursehub set image deployment/api api=$env:API_IMAGE
+          kubectl -n coursehub set image deployment/nginx nginx=$env:NGINX_IMAGE
+          kubectl -n coursehub rollout status deployment/api --timeout=180s
+          kubectl -n coursehub rollout status deployment/nginx --timeout=180s
+
+      - name: Состояние после развёртывания
+        run: kubectl -n coursehub get pods -o wide

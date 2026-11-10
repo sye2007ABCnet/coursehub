@@ -1,0 +1,73 @@
+# Учебный кластер Docker Swarm из трёх узлов на одном компьютере.
+# Каждый узел — отдельный контейнер Docker-in-Docker (DinD) со своим
+# демоном Docker внутри. Для Swarm это три независимые машины.
+#
+# Запуск: docker compose -f swarm/cluster.yaml up -d
+
+name: swarm-cluster
+
+services:
+
+  # Управляющий узел (manager): хранит состояние кластера и распределяет задачи
+  manager:
+    image: docker:29-dind
+    container_name: manager
+    hostname: manager
+    privileged: true                 # DinD требует расширенных прав
+    command: ["--insecure-registry=registry:5000"]
+    environment:
+      DOCKER_TLS_CERTDIR: ""         # внутри учебного стенда TLS не используется
+    ports:
+      - "8081:8081"                  # сайт
+      - "127.0.0.1:8082:8082"        # Adminer
+    volumes:
+      - manager-data:/var/lib/docker
+      - ..:/project:ro               # файлы проекта для команды docker stack deploy
+      - ../backups:/backups          # сюда сервис backup сохраняет копии БД
+    networks: [cluster]
+
+  # Рабочие узлы (worker): выполняют контейнеры, которые им назначил manager
+  worker1:
+    image: docker:29-dind
+    container_name: worker1
+    hostname: worker1
+    privileged: true
+    command: ["--insecure-registry=registry:5000"]
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    ports:
+      - "8083:8081"                  # сайт через рабочий узел (демонстрация routing mesh)
+    volumes:
+      - worker1-data:/var/lib/docker
+    networks: [cluster]
+
+  worker2:
+    image: docker:29-dind
+    container_name: worker2
+    hostname: worker2
+    privileged: true
+    command: ["--insecure-registry=registry:5000"]
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    volumes:
+      - worker2-data:/var/lib/docker
+    networks: [cluster]
+
+  # Локальный реестр образов: из него узлы кластера скачивают образы,
+  # поэтому доступ к Docker Hub узлам не нужен
+  registry:
+    image: registry:3
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - registry-data:/var/lib/registry
+    networks: [cluster]
+
+networks:
+  cluster: {}     # сеть, через которую узлы связываются между собой
+
+volumes:
+  manager-data: {}
+  worker1-data: {}
+  worker2-data: {}
+  registry-data: {}

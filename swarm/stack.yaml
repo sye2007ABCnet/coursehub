@@ -1,0 +1,122 @@
+# Стек CourseHub для кластера Docker Swarm.
+# Запуск: docker stack deploy -c stack.yaml coursehub
+#
+# Отличия от compose.yaml:
+#   - образы берутся из реестра кластера (registry:5000), а не собираются;
+#   - секция deploy задаёт число реплик, размещение по узлам и порядок обновления;
+#   - сети имеют драйвер overlay и связывают контейнеры на разных узлах;
+#   - пароль БД передаётся секретом, а не переменной окружения.
+
+services:
+
+  nginx:
+    image: registry:5000/coursehub-nginx:1.0
+    ports:
+      - "8081:80"            # порт открыт на всех узлах (routing mesh)
+    networks: [frontend]
+    deploy:
+      replicas: 2
+
+  api:
+    image: registry:5000/coursehub-api:1.0
+    environment:
+      DATABASE_URL: postgresql://coursehub@postgres:5432/coursehub   # без пароля
+      REDIS_URL: redis://redis:6379/0
+    secrets: [db_password]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks: [frontend, backend]
+    deploy:
+      replicas: 3
+      placement:
+        constraints: [node.role == worker]     # api работает только на рабочих узлах
+      resources:
+        limits: { cpus: "0.50", memory: 256M }
+      update_config:                            # последовательное обновление без простоя
+        parallelism: 1                          # обновлять по одной реплике
+        delay: 10s                              # пауза между репликами
+        order: start-first                      # сначала запустить новую, потом остановить старую
+        failure_action: rollback                # при ошибке вернуть предыдущую версию
+      restart_policy:
+        condition: any
+
+  postgres:
+    image: registry:5000/postgres:17-alpine
+    environment:
+      POSTGRES_USER: coursehub
+      POSTGRES_DB: coursehub
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    configs:
+      - source: init_sql
+        target: /docker-entrypoint-initdb.d/init.sql
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backend]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]     # том с данными находится на manager
+
+  redis:
+    image: registry:5000/redis:8.2-alpine
+    networks: [backend]
+    deploy:
+      replicas: 1
+
+  backup:
+    image: registry:5000/postgres:17-alpine
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: coursehub
+      PGDATABASE: coursehub
+      BACKUP_INTERVAL: "300"
+    secrets: [db_password]
+    configs:
+      - source: backup_script
+        target: /backup.sh
+    volumes:
+      - type: bind
+        source: /backups          # каталог на узле manager (связан с папкой backups проекта)
+        target: /backups
+    networks: [backend]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+
+  adminer:
+    image: registry:5000/adminer:6.3.0
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    ports:
+      - "8082:8080"
+    networks: [frontend, backend]
+    deploy:
+      replicas: 1
+
+# Секрет хранится в зашифрованном журнале Raft на manager и передаётся только
+# тем контейнерам, которым он указан, в виде файла /run/secrets/db_password
+secrets:
+  db_password:
+    file: ./db_password.txt
+
+configs:
+  init_sql:
+    file: ../db/init.sql
+  backup_script:
+    file: ../backup.sh
+
+networks:
+  frontend:
+    driver: overlay
+  backend:
+    driver: overlay
+    internal: true
+
+volumes:
+  pgdata: {}

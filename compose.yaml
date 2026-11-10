@@ -1,0 +1,116 @@
+# CourseHub — описание всех контейнеров проекта.
+# Запуск: docker compose up -d --build
+# Значения ${...} берутся из файла .env
+
+name: coursehub
+
+services:
+
+  # 1. Веб-сервер: отдаёт интерфейс и передаёт запросы /api/ в контейнер api
+  nginx:
+    build: ./nginx
+    image: coursehub-nginx
+    ports:
+      - "${HTTP_PORT}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [frontend]
+    restart: always
+
+  # 2. Серверная часть на Python (FastAPI)
+  api:
+    build: ./api
+    image: coursehub-api
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [frontend, backend]
+    restart: always
+
+  # 3. База данных PostgreSQL
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data     # данные БД сохраняются в томе
+    configs:
+      - source: init_sql                    # создание таблиц при первом запуске
+        target: /docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      # -h 127.0.0.1: проверка по сети; во время выполнения init.sql сервер
+      # слушает только локальный сокет, поэтому БД не считается готовой раньше времени
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+    restart: always
+
+  # 4. Redis: хранит сессии пользователей и кэш списка курсов
+  redis:
+    image: redis:8.2-alpine
+    networks: [backend]
+    restart: always
+
+  # 5. Резервное копирование БД: раз в BACKUP_INTERVAL секунд делает копию через pg_dump.
+  #    Используется образ postgres, так как в нём уже есть утилита pg_dump.
+  backup:
+    image: postgres:17-alpine
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      BACKUP_INTERVAL: ${BACKUP_INTERVAL}
+    volumes:
+      - ./backups:/backups      # копии появляются в папке backups проекта
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    configs:
+      - source: backup_script
+        target: /backup.sh
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [backend]
+    restart: always
+
+  # 6. Adminer: веб-интерфейс для администрирования базы данных.
+  #    Порт открыт только для этого компьютера (127.0.0.1), из сети он недоступен.
+  adminer:
+    image: adminer:6.3.0
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    ports:
+      - "127.0.0.1:${ADMINER_PORT}:8080"
+    depends_on: [postgres]
+    networks: [frontend, backend]
+    restart: always
+
+# Файлы конфигурации, которые передаются в контейнеры
+configs:
+  init_sql:
+    file: ./db/init.sql
+  backup_script:
+    file: ./backup.sh
+
+networks:
+  frontend: {}          # сеть для веб-части
+  backend:
+    internal: true      # внутренняя сеть без доступа извне: БД и Redis
+
+volumes:
+  pgdata: {}

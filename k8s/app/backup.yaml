@@ -1,0 +1,62 @@
+# Резервное копирование БД.
+# В Kubernetes для задач по расписанию есть объект CronJob: каждые 5 минут
+# создаётся под, который делает копию и завершается. Поэтому бесконечный
+# цикл из backup.sh здесь не нужен.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup
+  namespace: coursehub
+spec:
+  schedule: "*/5 * * * *"          # формат cron: каждые 5 минут
+  successfulJobsHistoryLimit: 3      # хранить сведения о трёх последних запусках
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: postgres:17-alpine
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: PGHOST
+                  value: postgres
+                - name: PGUSER
+                  value: coursehub
+                - name: PGDATABASE
+                  value: coursehub
+                - name: PGPASSWORD                 # пароль из Secret как переменная окружения
+                  valueFrom:
+                    secretKeyRef:
+                      name: db-password
+                      key: password
+              command:
+                - sh
+                - -c
+                - |
+                  FILE=/backups/coursehub_$(date +%Y-%m-%d_%H-%M-%S).dump
+                  pg_dump -Fc -f "$FILE" || exit 1     # при ошибке задача помечается как неуспешная
+                  echo "Создана копия: $FILE"
+                  find /backups -name "*.dump" -mtime +7 -delete
+                  ls -lh /backups
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: backups
+---
+# Постоянный том для хранения резервных копий
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backups
+  namespace: coursehub
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi

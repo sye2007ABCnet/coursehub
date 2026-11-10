@@ -1,0 +1,5 @@
+# Пространство имён: все объекты проекта находятся в отдельной группе coursehub
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: coursehub
